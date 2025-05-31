@@ -15,7 +15,7 @@ const port = process.env.PORT || 4000;
 // middlewares
 app.use(express.json())
 app.use(cors({
-  origin: ["http://localhost:5173", "http://localhost:5174"],
+  origin: ["https://dailydoe-1qt9.vercel.app/", "https://admin1-two.vercel.app/"],
   credentials: true
 }));
 
