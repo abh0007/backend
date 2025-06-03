@@ -1,133 +1,91 @@
 import orderModel from "../models/orderModel.js";
-import userModel from "../models/userModel.js"
-import Stripe from "stripe";
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+import userModel from "../models/userModel.js";
 
-//config variables
-const currency = "inr";
-const deliveryCharge = 50;
-const frontend_URL = 'https://dailydoe-1qt9.vercel.app/';
-
-// Placing User Order for Frontend using stripe
+// Place an Order (Pay at Counter or Online using PhonePe)
 const placeOrder = async (req, res) => {
+  try {
+    const { userId, items, amount, pickupDetails, paymentMethod } = req.body;
 
-    try {
-        const newOrder = new orderModel({
-            userId: req.body.userId,
-            items: req.body.items,
-            amount: req.body.amount,
-            address: req.body.address,
-        })
-        await newOrder.save();
-        await userModel.findByIdAndUpdate(req.body.userId, { cartData: {} });
-
-        const line_items = req.body.items.map((item) => ({
-            price_data: {
-                currency: currency,
-                product_data: {
-                    name: item.name
-                },
-                unit_amount: item.price * 100 
-            },
-            quantity: item.quantity
-        }))
-
-        line_items.push({
-            price_data: {
-                currency: currency,
-                product_data: {
-                    name: "Delivery Charge"
-                },
-                unit_amount: deliveryCharge * 100
-            },
-            quantity: 1
-        })
-
-        const session = await stripe.checkout.sessions.create({
-            success_url: `${frontend_URL}/verify?success=true&orderId=${newOrder._id}`,
-            cancel_url: `${frontend_URL}/verify?success=false&orderId=${newOrder._id}`,
-            line_items: line_items,
-            mode: 'payment',
-        });
-
-        res.json({ success: true, session_url: session.url });
-
-    } catch (error) {
-        console.log(error);
-        res.json({ success: false, message: "Error" })
+    if (!userId || !items || !amount || !pickupDetails || !paymentMethod) {
+      return res.json({ success: false, message: "Missing required fields" });
     }
-}
 
-// Placing User Order for Frontend using stripe
-const placeOrderCod = async (req, res) => {
+    const newOrder = new orderModel({
+      userId,
+      items,
+      amount,
+      pickupDetails,
+      paymentMethod,
+      paymentStatus: paymentMethod === "Pay at Counter" ? "Pending" : "Initiated"
+    });
 
-    try {
-        const newOrder = new orderModel({
-            userId: req.body.userId,
-            items: req.body.items,
-            amount: req.body.amount,
-            address: req.body.address,
-            payment: true,
-        })
-        await newOrder.save();
-        await userModel.findByIdAndUpdate(req.body.userId, { cartData: {} });
+    await newOrder.save();
+    await userModel.findByIdAndUpdate(userId, { cartData: {} });
 
-        res.json({ success: true, message: "Order Placed" });
-
-    } catch (error) {
-        console.log(error);
-        res.json({ success: false, message: "Error" })
+    // For PhonePe (online) payment, frontend should now call payment initiation
+    if (paymentMethod === "Online") {
+      return res.json({
+        success: true,
+        message: "Order created. Proceed with PhonePe payment.",
+        orderId: newOrder._id
+      });
     }
-}
 
-// Listing Order for Admin panel
+    // For Pay at Counter
+    res.json({ success: true, message: "Order placed for pick-up at counter" });
+
+  } catch (error) {
+    console.log(error);
+    res.json({ success: false, message: "Order failed" });
+  }
+};
+
+// List all Orders (Admin Panel)
 const listOrders = async (req, res) => {
-    try {
-        const orders = await orderModel.find({});
-        res.json({ success: true, data: orders })
-    } catch (error) {
-        console.log(error);
-        res.json({ success: false, message: "Error" })
-    }
-}
+  try {
+    const orders = await orderModel.find({});
+    res.json({ success: true, data: orders });
+  } catch (error) {
+    console.log(error);
+    res.json({ success: false, message: "Error retrieving orders" });
+  }
+};
 
-// User Orders for Frontend
+// List Orders of a Specific User
 const userOrders = async (req, res) => {
-    try {
-        const orders = await orderModel.find({ userId: req.body.userId });
-        res.json({ success: true, data: orders })
-    } catch (error) {
-        console.log(error);
-        res.json({ success: false, message: "Error" })
-    }
-}
+  try {
+    const orders = await orderModel.find({ userId: req.body.userId });
+    res.json({ success: true, data: orders });
+  } catch (error) {
+    console.log(error);
+    res.json({ success: false, message: "Error retrieving user orders" });
+  }
+};
 
+// Update Order Status (Admin Panel)
 const updateStatus = async (req, res) => {
-    console.log(req.body);
-    try {
-        await orderModel.findByIdAndUpdate(req.body.orderId, { status: req.body.status });
-        res.json({ success: true, message: "Status Updated" })
-    } catch (error) {
-        res.json({ success: false, message: "Error" })
-    }
+  try {
+    await orderModel.findByIdAndUpdate(req.body.orderId, { status: req.body.status });
+    res.json({ success: true, message: "Status updated" });
+  } catch (error) {
+    res.json({ success: false, message: "Failed to update status" });
+  }
+};
 
-}
-
+// Verify Order After PhonePe Payment
 const verifyOrder = async (req, res) => {
-    const { orderId, success } = req.body;
-    try {
-        if (success === "true") {
-            await orderModel.findByIdAndUpdate(orderId, { payment: true });
-            res.json({ success: true, message: "Paid" })
-        }
-        else {
-            await orderModel.findByIdAndDelete(orderId)
-            res.json({ success: false, message: "Not Paid" })
-        }
-    } catch (error) {
-        res.json({ success: false, message: "Not  Verified" })
+  const { orderId, success } = req.body;
+  try {
+    if (success === "true") {
+      await orderModel.findByIdAndUpdate(orderId, { paymentStatus: "Paid" });
+      res.json({ success: true, message: "Payment confirmed" });
+    } else {
+      await orderModel.findByIdAndDelete(orderId);
+      res.json({ success: false, message: "Payment failed, order cancelled" });
     }
+  } catch (error) {
+    res.json({ success: false, message: "Verification failed" });
+  }
+};
 
-}
-
-export { placeOrder, listOrders, userOrders, updateStatus, verifyOrder, placeOrderCod }
+export { placeOrder, listOrders, userOrders, updateStatus, verifyOrder };
